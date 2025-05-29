@@ -1,0 +1,189 @@
+---
+title: "DS CP"
+author: "B1 Group 2"
+output:
+  html_document:
+    df_print: paged
+  html_notebook: default
+  word_document: default
+---
+
+```{r}
+# Load Libraries
+library(class)
+library(e1071)
+library(caTools)
+library(caret)
+library(dplyr)
+library(pROC)
+library(ggplot2)
+library(kknn)
+library(plotly)
+library(sunburstR)
+```
+
+
+Import Dataset
+```{r}
+emp_data <- read.csv("C:/Users/bhagw/OneDrive/Desktop/employee_attrition.csv")
+head(emp_data)
+```
+
+Exclude Non-Informative Columns
+```{r}
+emp_data <- emp_data %>% select(-EmployeeCount, -Over18, -StandardHours)
+```
+
+Convert Target Variable to Factor
+```{r}
+emp_data$Attrition <- as.factor(emp_data$Attrition)
+```
+
+
+Visualization: Distribution of Attrition
+```{r}
+attrition_counts <- table(emp_data$Attrition)
+labels <- c("No Attrition", "Yes Attrition")
+fig <- plot_ly(
+  labels = labels,
+  values = attrition_counts,
+  type = "pie",
+  textfont = list(size = 15),
+  marker = list(
+    colors = c('#B9C0C9', 'yellow'),
+    line = list(color = '#000000', width = 1.5)
+  )
+) %>%
+  layout(title = "Distribution of Attrition Variable")
+fig
+```
+
+
+Visualization: Effect of Age on Attrition
+```{r}
+ggplot(emp_data, aes(x = Age, fill = as.factor(Attrition))) +
+  geom_histogram(position = "identity", alpha = 0.6, bins = 30) +
+  scale_fill_manual(values = c("#B8890B", "#FFB90F"), labels = c("No Attrition", "Yes Attrition")) +
+  labs(x = "Age", y = "Count", fill = "Attrition") +
+  ggtitle("Distribution of Age by Attrition") +
+  theme_minimal() +
+  theme(plot.title = element_text(hjust = 0.5)) +
+  geom_density(aes(y = ..count..), color = "black", adjust = 1)
+```
+
+Visualization: Gender Distribution
+```{r}
+left_counts <- emp_data %>%
+  group_by(Gender, Attrition) %>%
+  summarise(count = n(), .groups = 'drop')
+stayed_data <- left_counts %>% filter(Attrition == "No")
+left_data <- left_counts %>% filter(Attrition == "Yes")
+```
+
+
+Stayed Pie Chart
+```{r}
+fig1 <- plot_ly(
+  labels = paste(stayed_data$Gender, "Stayed"),
+  values = stayed_data$count,
+  type = "pie",
+  marker = list(colors = c('#FF9999', '#66B3FF'), line = list(color = '#000000', width = 1.5)),
+  textinfo = 'percent+label'
+) %>%
+  layout(title = "Gender Distribution for Employees Who Stayed")
+fig1
+```
+
+
+Left Pie Chart
+```{r}
+ggplot(left_data, aes(x = "", y = count, fill = Gender)) +
+  geom_bar(stat = "identity", width = 1, color = "black") +
+  coord_polar(theta = "y") +
+  labs(title = "Gender Distribution for Employees Who Left") +
+  theme_void() +
+  scale_fill_manual(values = c("lightblue", "lightpink"))
+```
+
+Data Splitting
+```{r}
+set.seed(123)
+split <- sample.split(emp_data$Attrition, SplitRatio = 0.7)
+train_data <- subset(emp_data, split == TRUE)
+test_data <- subset(emp_data, split == FALSE)
+```
+
+
+Data Preparation for k-NN
+```{r}
+train_x <- train_data[, sapply(train_data, is.numeric)]
+test_x <- test_data[, sapply(test_data, is.numeric)]
+train_y <- train_data$Attrition
+test_y <- test_data$Attrition
+```
+
+
+Normalize Numeric Data
+```{r}
+normalize <- function(x) { (x - min(x)) / (max(x) - min(x)) }
+train_x_norm <- as.data.frame(lapply(train_x, normalize))
+test_x_norm <- as.data.frame(lapply(test_x, normalize))
+```
+
+
+KNN MODEL
+```{r}
+knn_prediction <- knn(train = train_x_norm, test = test_x_norm, cl = train_y, k = 5)
+knn_confMatrix <- confusionMatrix(knn_prediction, test_y)
+print(knn_confMatrix)
+```
+
+KNN ROC CURVE
+```{r}
+knn_model_kknn <- train.kknn(Attrition ~ ., data = train_data, kmax = 5, distance = 2)
+knn_probabilities <- predict(knn_model_kknn, test_data, type = "prob")
+knnroc_obj <- roc(test_y, knn_probabilities[, 2])  # Probabilities for "Yes" class
+ggroc(knnroc_obj) +
+  ggtitle(paste("k-NN ROC Curve (AUC =", round(auc(knnroc_obj), 2), ")")) +
+  xlab("1 - Specificity (False Positive Rate)") +
+  ylab("Sensitivity (True Positive Rate)") +
+  theme_minimal()
+```
+
+SVM 
+```{r}
+svm_model <- svm(Attrition ~ ., data = train_data, kernel = "radial", probability = TRUE)
+svm_predictions <- predict(svm_model, newdata = test_data, probability = TRUE)
+svm_confMatrix <- confusionMatrix(svm_predictions, test_data$Attrition)
+print(svm_confMatrix)
+```
+SVM ROC CURVE
+```{r}
+svm_probabilities <- attr(svm_predictions, "probabilities")[, 2] 
+svmroc_obj <- roc(test_y, svm_probabilities)
+ggroc(svmroc_obj) +
+  ggtitle(paste("SVM ROC Curve (AUC =", round(auc(svmroc_obj), 2), ")")) +
+  xlab("1 - Specificity (False Positive Rate)") +
+  ylab("Sensitivity (True Positive Rate)") +
+  theme_minimal()
+```
+
+LOGISTIC REGRESSION
+```{r}
+log_model <- glm(Attrition ~ ., family = binomial, data = train_data)
+log_pred_prob <- predict(log_model, newdata = test_data, type = "response")
+log_pred_class <- ifelse(log_pred_prob > 0.5, "Yes", "No")
+log_pred_class <- as.factor(log_pred_class)
+log_confMatrix <- confusionMatrix(log_pred_class, test_data$Attrition)
+print(log_confMatrix)
+```
+LOGISTIC ROC CURVE
+```{r}
+logroc_obj <- roc(as.numeric(test_data$Attrition) - 1, log_pred_prob)
+ggroc(logroc_obj) +
+  ggtitle(paste("logistic ROC Curve (AUC =", round(auc(logroc_obj), 2), ")")) +
+  xlab("1 - Specificity (False Positive Rate)") +
+  ylab("Sensitivity (True Positive Rate)") +
+  theme_minimal()
+```
+
